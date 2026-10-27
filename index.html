@@ -1,0 +1,234 @@
+<script>
+  // --- APPLICATION STATE & INITIALIZATION ---
+  const CONFIG = {
+    STORAGE_KEY: 'vibetask_gemini_api_key',
+    DEFAULT_MODEL: 'gemini-2.5-flash'
+  };
+
+  // On page load, restore saved API key if present and bind event handlers
+  document.addEventListener('DOMContentLoaded', () => {
+    const savedKey = localStorage.getItem(CONFIG.STORAGE_KEY);
+    if (savedKey) {
+      document.getElementById('geminiApiKeyInput').value = savedKey;
+      updateKeyStatus(true);
+    }
+    
+    // Allow closing the settings modal by clicking the backdrop
+    const modal = document.getElementById('keyModal');
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) toggleModal(false);
+    });
+  });
+
+  // --- TAB NAVIGATION SYSTEM ---
+  function switchTab(tabId) {
+    const btnNotes = document.getElementById('tabBtnNotes');
+    const btnSplitter = document.getElementById('tabBtnSplitter');
+    const tabNotes = document.getElementById('tabNotes');
+    const tabSplitter = document.getElementById('tabSplitter');
+
+    if (tabId === 'notes') {
+      // Active State styling for Notes tab
+      btnNotes.className = 'tab-btn px-4 py-2 font-medium text-sm text-indigo-600 border-b-2 border-indigo-600 flex items-center gap-2';
+      btnSplitter.className = 'tab-btn px-4 py-2 font-medium text-sm text-slate-500 hover:text-slate-800 flex items-center gap-2';
+      tabNotes.classList.remove('hidden');
+      tabSplitter.classList.add('hidden');
+    } else if (tabId === 'splitter') {
+      // Active State styling for Splitter tab
+      btnNotes.className = 'tab-btn px-4 py-2 font-medium text-sm text-slate-500 hover:text-slate-800 flex items-center gap-2';
+      btnSplitter.className = 'tab-btn px-4 py-2 font-medium text-sm text-indigo-600 border-b-2 border-indigo-600 flex items-center gap-2';
+      tabNotes.classList.add('hidden');
+      tabSplitter.classList.remove('hidden');
+    }
+  }
+
+  // --- API KEY CONFIGURATION MODAL ---
+  function toggleModal(show) {
+    const modal = document.getElementById('keyModal');
+    if (show) {
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    } else {
+      modal.classList.remove('flex');
+      modal.classList.add('hidden');
+    }
+  }
+
+  function saveApiKey() {
+    const keyInput = document.getElementById('geminiApiKeyInput').value.trim();
+    if (!keyInput) {
+      alert('Please enter a valid API key string.');
+      return;
+    }
+    localStorage.setItem(CONFIG.STORAGE_KEY, keyInput);
+    updateKeyStatus(true);
+    toggleModal(false);
+  }
+
+  function updateKeyStatus(hasKey) {
+    const statusSpan = document.getElementById('apiKeyStatus');
+    if (hasKey) {
+      statusSpan.innerHTML = '<span class="text-emerald-600 flex items-center gap-1"><i class="fa-solid fa-circle-check"></i> Key Configured</span>';
+    } else {
+      statusSpan.innerText = 'Set Gemini Key';
+    }
+  }
+
+  // --- TAB 1: NOTES TO ACTION ITEMS LOGIC ---
+  function loadSampleNotes() {
+    document.getElementById('rawNotesInput').value = 
+`Marketing sync notes from today:
+- Mark mentioned that the Facebook ad campaign needs a revised budget review by Thursday morning before he leaves for his trip.
+- We talked about the landing page performance. Sarah volunteered to perform an audit on why the mobile signup rates dropped and share a summary tomorrow afternoon.
+- Oh, also need to make sure someone fixes that broken link in the footer of the pricing section. Alex said he could look at it if he finishes his current ticket, otherwise grab Jordan.
+- Next meeting scheduled for next Monday at 10 AM EST. Jenn will distribute the calendar invite.`;
+  }
+
+  function clearNotes() {
+    document.getElementById('rawNotesInput').value = '';
+    document.getElementById('outputContainer').innerHTML = `
+      <div class="text-center py-16 text-slate-400 text-xs">
+        Enter notes and click "Generate Action Items" to inspect structured tasks.
+      </div>
+    `;
+  }
+
+  async function processNotes() {
+    const apiKey = localStorage.getItem(CONFIG.STORAGE_KEY);
+    if (!apiKey) {
+      alert('API Key missing! Please set your Google AI Studio Gemini API Key using the button in the upper right header before run.');
+      toggleModal(true);
+      return;
+    }
+
+    const inputData = document.getElementById('rawNotesInput').value.trim();
+    if (!inputData) {
+      alert('Please enter or insert sample messy text notes before parsing.');
+      return;
+    }
+
+    // Toggle interactive loading UI state
+    const indicator = document.getElementById('loadingIndicator');
+    const outputContainer = document.getElementById('outputContainer');
+    const processBtn = document.getElementById('processBtn');
+
+    indicator.classList.remove('hidden');
+    outputContainer.classList.add('hidden');
+    processBtn.disabled = true;
+    processBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+    // System prompt enforcing crisp structured item serialization
+    const promptInstructions = `You are an expert project management assistant. Analyze the messy raw text/meeting notes below. Extract all explicitly stated or strongly implied action items, assignments, tasks, and deadlines.
+Format your entire response strictly into a clean, well-spaced valid Markdown document using this exact blueprint:
+
+### 📋 Executive Task Summary
+*Provide a concise 1-2 sentence high-level overview of the main priorities extracted.*
+
+### 🛠️ Action Item Breakdown
+
+| Task / Assignment | Assignee | Deadline / Timeline | Priority |
+| :--- | :--- | :--- | :--- |
+| (Task details) | (Name or Unassigned) | (Date, day, or Flexible) | (High/Medium/Low) |
+
+### 📅 Key Events & Milestones
+- **Event Name**: Details and schedule timelines.
+
+Notes to process:
+${inputData}`;
+
+    try {
+      // Direct REST API architecture call bypassing hefty SDK dependencies
+      const endpoint = `https://googleapis.com{CONFIG.DEFAULT_MODEL}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptInstructions }] }]
+        })
+      });
+
+      if (!response.ok) {
+        const errorDetails = await response.json();
+        throw new Error(errorDetails.error?.message || `HTTP Server error ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const outputMarkdown = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!outputMarkdown) {
+        throw new Error('Empty model token response payload returned from downstream host.');
+      }
+
+      // Render out structured HTML components dynamically using manual fast string sanitization
+      renderMarkdownOutput(outputMarkdown);
+
+    } catch (err) {
+      console.error(err);
+      outputContainer.innerHTML = `
+        <div class="p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs">
+          <p class="font-bold flex items-center gap-1"><i class="fa-solid fa-triangle-exclamation"></i> Parsing Failed</p>
+          <p class="mt-1">${err.message}</p>
+        </div>
+      `;
+    } finally {
+      // Revert interaction blocking loaders
+      indicator.classList.add('hidden');
+      outputContainer.classList.remove('hidden');
+      processBtn.disabled = false;
+      processBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+  }
+
+  // Fast structural markdown element layout parsing utility
+  function renderMarkdownOutput(mdText) {
+    const container = document.getElementById('outputContainer');
+    container.innerHTML = ''; // Wipe container clean
+    container.setAttribute('data-raw-markdown', mdText); // Cache text for programmatic clipboard manipulation
+
+    const lines = mdText.split('\n');
+    let htmlBuffer = "";
+    let isTableActive = false;
+
+    lines.forEach(line => {
+      let trimmed = line.trim();
+
+      // Catch headers
+      if (trimmed.startsWith('### ')) {
+        if (isTableActive) { htmlBuffer += '</tbody></table></div>'; isTableActive = false; }
+        htmlBuffer += `<h3 class="text-sm font-bold text-slate-900 mt-4 mb-2 flex items-center gap-1">${trimmed.replace('### ', '')}</h3>`;
+        return;
+      }
+
+      // Catch tables
+      if (trimmed.startsWith('|')) {
+        // Skip structural markdown grid sizing separator rows
+        if (trimmed.includes('---') || trimmed.includes(':---')) return;
+
+        const cells = line.split('|').map(c => c.trim()).filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+        
+        if (!isTableActive) {
+          isTableActive = true;
+          htmlBuffer += '<div class="overflow-x-auto border border-slate-200 rounded-xl my-2"><table class="w-full text-left border-collapse text-xs">';
+          htmlBuffer += '<thead class="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200"><tr>';
+          cells.forEach(cell => { htmlBuffer += `<th class="p-2.5">${cell}</th>`; });
+          htmlBuffer += '</tr></thead><tbody class="divide-y border-slate-100 text-slate-700">';
+        } else {
+          htmlBuffer += '<tr class="hover:bg-slate-50/80 transition">';
+          cells.forEach(cell => { htmlBuffer += `<td class="p-2.5">${cell}</td>`; });
+          htmlBuffer += '</tr>';
+        }
+        return;
+      }
+
+      // Close structural blocks gracefully
+      if (!trimmed.startsWith('|') && isTableActive) {
+        htmlBuffer += '</tbody></table></div>';
+        isTableActive = false;
+      }
+
+      // Render bullet entries
+      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        let content = trimmed.substring(2);
+        // Replace bold tags inside strings safely
+        content = content.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>');
+        htmlBuffer += `<div class="flex items-start gap-2 text-xs text-slate-600 py-0.5"><i class="fa-solid fa-circle text-[6px] text-indigo-400 mt-1.5 flex-shrink-0"></i><p>${content}</p></div>`;
